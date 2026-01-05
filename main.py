@@ -1,328 +1,323 @@
 import flet as ft
+import yt_dlp
+import time
+import threading
+import random
 import traceback
 
-def main(page: ft.Page):
-    # Configurações de Performance e Compatibilidade
-    page.title = "Player Turbo"
-    page.bgcolor = "black"
-    page.scroll = "auto" 
-    page.theme_mode = "dark"
-    page.padding = 5
-    
-    # Reduzir animações para ganhar velocidade
-    page.window_width = 390
-    page.window_height = 700
-
-    try:
-        # --- INÍCIO DO CÓDIGO ---
-        import yt_dlp
-        import time
-        import threading
-        import random
-
-        # Variáveis Globais (dentro do main)
-        all_playlists = {"Principal": []} 
-        current_playlist_name = "Principal"
-        playlist = [] 
-        current_index = 0   
-        is_playing = False
-        is_shuffled = False
-        audio_player = None 
-
-        # --- UI Elementos ---
+# --- CLASSE DE LÓGICA (O "CÉREBRO" DO APP) ---
+class AudioController:
+    def __init__(self, page):
+        self.page = page
+        self.playlist = []
+        self.current_index = 0
+        self.is_playing = False
+        self.is_shuffled = False
+        self.audio_widget = self._criar_audio_widget()
         
-        snack_aviso = ft.SnackBar(ft.Text(""), bgcolor="blue")
-        page.overlay.append(snack_aviso)
+        # Injeta o audio na página de forma segura
+        if self.audio_widget:
+            self.page.overlay.append(self.audio_widget)
+        else:
+            print("AVISO: Componente de Áudio não suportado nesta versão.")
 
-        def mostrar_aviso(texto, cor="blue"):
-            snack_aviso.content.value = texto
-            snack_aviso.bgcolor = cor
-            snack_aviso.open = True
-            page.update()
-
-        lbl_nome_playlist = ft.Text(f"Playlist: {current_playlist_name}", size=12, color="blue200", weight="bold")
-        lbl_Andre0 = ft.Text("                                  ", color="grey", weight="bold", size=14, text_align="center")
-        lbl_Andre = ft.Text("Player Mobile - André R. Custódio 😜", color="grey", weight="bold", size=14, text_align="center")
-        
-        txt_import_url = ft.TextField(
-            hint_text="Link...", text_size=12, expand=True, height=40, content_padding=10, border_radius=15
-        )
-        
-        lv_playlist = ft.ListView(expand=True, spacing=0, padding=0, auto_scroll=False)
-
-        img_capa = ft.Image(
-            src="https://img.icons8.com/fluency/240/music-record.png",
-            width=100, height=100, border_radius=5, 
-            fit="cover" 
-        )
-
-        lbl_titulo = ft.Text("Pronto", weight="bold", size=13, no_wrap=True, overflow="ellipsis", text_align="center")
-        lbl_status = ft.Text("...", size=11, color="grey", text_align="center")
-        
-        lbl_tempo_now = ft.Text("00:00", size=10)
-        
-        # --- Lógica de Áudio ---
-
-        def seek_audio(val): 
-            try:
-                if audio_player: audio_player.seek(int(val))
-            except: pass
-
-        slider_tempo = ft.Slider(min=0, max=100, value=0, expand=True, height=20, on_change=lambda e: seek_audio(e.control.value))
-
-        def atualizar_progresso(e):
-            if is_playing and audio_player:
-                try:
-                    ms = int(e.data)
-                    slider_tempo.value = ms
-                    lbl_tempo_now.value = time.strftime('%M:%S', time.gmtime(ms // 1000))
-                    if slider_tempo.max == 100: 
-                        dur = audio_player.get_duration()
-                        if dur: slider_tempo.max = dur
-                except: pass
-                page.update()
-        
-        def verificar_fim(e):
-            if e.data == "completed": proxima(None)
-
+    def _criar_audio_widget(self):
         try:
             if hasattr(ft, 'Audio'):
-                audio_player = ft.Audio(
-                    src="https://luan.xyz/files/audio/ambient_c_motion.mp3", 
-                    autoplay=False, volume=1.0,
-                    on_position_changed=lambda e: atualizar_progresso(e),
-                    on_state_changed=lambda e: verificar_fim(e)
+                return ft.Audio(
+                    autoplay=False,
+                    volume=1.0,
+                    on_position_changed=self._on_position_change,
+                    on_state_changed=self._on_state_change
                 )
-                page.overlay.append(audio_player)
+        except: return None
+        return None
+
+    def _on_position_change(self, e):
+        # Atualiza a UI via evento (mais leve)
+        self.page.pubsub.send_all({"tipo": "progresso", "ms": int(e.data)})
+
+    def _on_state_change(self, e):
+        if e.data == "completed":
+            self.proxima()
+
+    def carregar_audio(self, url):
+        if self.audio_widget:
+            self.audio_widget.src = url
+            self.audio_widget.update()
+            
+    def play(self):
+        if self.audio_widget:
+            self.audio_widget.play()
+            self.is_playing = True
+
+    def pause(self):
+        if self.audio_widget:
+            self.audio_widget.pause()
+            self.is_playing = False
+            
+    def resume(self):
+        if self.audio_widget:
+            self.audio_widget.resume()
+            self.is_playing = True
+
+    def seek(self, ms):
+        if self.audio_widget:
+            self.audio_widget.seek(int(ms))
+
+    def proxima(self):
+        if self.current_index + 1 < len(self.playlist):
+            self.tocar_index(self.current_index + 1)
+        else:
+            self.page.pubsub.send_all({"tipo": "status", "texto": "Fim da Playlist"})
+
+    def anterior(self):
+        if self.current_index > 0:
+            self.tocar_index(self.current_index - 1)
+
+    def tocar_index(self, index):
+        if not self.playlist or index < 0 or index >= len(self.playlist): return
+        
+        self.current_index = index
+        musica_raw = self.playlist[index]
+        
+        # Notifica UI que mudou a música
+        self.page.pubsub.send_all({
+            "tipo": "mudanca_faixa", 
+            "index": index, 
+            "titulo": musica_raw.split(" - ", 1)[1] if " - " in musica_raw else "Áudio"
+        })
+
+        # Thread separada para buscar o link real (não trava o app)
+        threading.Thread(target=self._obter_link_real, args=(musica_raw,), daemon=True).start()
+
+    def _obter_link_real(self, musica_raw):
+        link_youtube = musica_raw.split(" - ")[0]
+        try:
+            ydl_opts = {
+                'format': 'bestaudio',
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True, # Ignora SSL para velocidade
+                'noplaylist': True
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(link_youtube, download=False)
+                url_stream = info['url']
+                capa = info.get('thumbnail', "")
+                
+                # Atualiza Audio e Capa
+                self.carregar_audio(url_stream)
+                time.sleep(0.2) # Pequeno buffer
+                self.play()
+                
+                self.page.pubsub.send_all({"tipo": "capa", "src": capa})
+                self.page.pubsub.send_all({"tipo": "status", "texto": "Tocando 🎵"})
+                
+        except Exception as e:
+            print(e)
+            self.page.pubsub.send_all({"tipo": "status", "texto": "Erro ao carregar. Pulando..."})
+            time.sleep(1)
+            self.proxima()
+
+    def adicionar_musicas(self, lista_novas):
+        self.playlist.extend(lista_novas)
+        # Salva no banco local
+        try:
+            self.page.client_storage.set("playlist_v2", self.playlist)
         except: pass
 
-        # --- Funções Principais ---
+    def carregar_memoria(self):
+        try:
+            salvo = self.page.client_storage.get("playlist_v2")
+            if salvo: self.playlist = salvo
+        except: pass
 
-        def renderizar_playlist():
-            lv_playlist.controls.clear()
+# --- UI (INTERFACE VISUAL) ---
+class PlayerUI(ft.UserControl):
+    def __init__(self, page):
+        super().__init__()
+        self.page = page
+        self.controller = AudioController(page)
+        
+        # Inscreve para receber atualizações do Controller
+        self.page.pubsub.subscribe(self.on_message)
+
+    def on_message(self, message):
+        tipo = message.get("tipo")
+        
+        if tipo == "progresso":
+            ms = message["ms"]
+            self.slider.value = ms
+            self.lbl_tempo.value = time.strftime('%M:%S', time.gmtime(ms // 1000))
+            # Ajuste dinâmico do max slider
+            if self.slider.max == 100 and self.controller.audio_widget:
+                d = self.controller.audio_widget.get_duration()
+                if d: self.slider.max = d
+            self.update()
             
-            if not playlist:
-                lv_playlist.controls.append(ft.Text("Vazia.", color="grey", size=12))
+        elif tipo == "mudanca_faixa":
+            self.lbl_titulo.value = message["titulo"]
+            self.btn_play.icon = ft.Icons.PAUSE_CIRCLE_FILLED
+            self.lbl_status.value = "Carregando..."
+            self.renderizar_lista()
+            self.update()
+            
+        elif tipo == "capa":
+            self.img_capa.src = message["src"]
+            self.img_capa.update()
+
+        elif tipo == "status":
+            self.lbl_status.value = message["texto"]
+            self.lbl_status.update()
+
+    def renderizar_lista(self):
+        self.lista_view.controls.clear()
+        if not self.controller.playlist:
+            self.lista_view.controls.append(ft.Text("Lista Vazia", color="grey", text_align="center"))
+        
+        for i, item in enumerate(self.controller.playlist):
+            titulo = item.split(" - ", 1)[1] if " - " in item else item
+            eh_atual = (i == self.controller.current_index)
+            
+            # Design Moderno de Item
+            item_ui = ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.EQUALIZER if eh_atual else ft.Icons.MUSIC_NOTE, 
+                           color="green" if eh_atual else "grey", size=16),
+                    ft.Text(f"{i+1}. {titulo}", 
+                           color="green" if eh_atual else "white", 
+                           size=13, no_wrap=True, overflow="ellipsis", expand=True),
+                    ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color="red", icon_size=16, 
+                                 on_click=lambda e, x=i: self.remover_item(x))
+                ]),
+                padding=10,
+                bgcolor="#1A1A1A" if not eh_atual else "#112211",
+                border_radius=8,
+                on_click=lambda e, x=i: self.controller.tocar_index(x)
+            )
+            self.lista_view.controls.append(item_ui)
+        self.lista_view.update()
+
+    def remover_item(self, index):
+        if 0 <= index < len(self.controller.playlist):
+            self.controller.playlist.pop(index)
+            self.controller.page.client_storage.set("playlist_v2", self.controller.playlist)
+            self.renderizar_lista()
+
+    def acao_play_pause(self, e):
+        if self.controller.is_playing:
+            self.controller.pause()
+            self.btn_play.icon = ft.Icons.PLAY_CIRCLE_FILLED
+        else:
+            if self.controller.audio_widget and self.controller.audio_widget.src:
+                self.controller.resume()
+                self.btn_play.icon = ft.Icons.PAUSE_CIRCLE_FILLED
             else:
-                for i, item in enumerate(playlist):
-                    try:
-                        titulo = item.split(" - ", 1)[1]
-                    except: titulo = item
+                self.controller.tocar_index(self.controller.current_index)
+        self.update()
 
-                    eh_atual = (i == current_index)
-                    cor_texto = "green" if eh_atual else "white"
-                    icone = ft.Icons.PLAY_ARROW if eh_atual else ft.Icons.MUSIC_NOTE
+    def acao_importar(self, e):
+        url = self.txt_url.value
+        if not url: return
+        
+        self.btn_import.disabled = True
+        self.lbl_status.value = "Buscando..."
+        self.update()
 
-                    linha = ft.TextButton(
-                        content=ft.Row([
-                            ft.Icon(icone, size=14, color=cor_texto),
-                            ft.Text(f"{i+1}. {titulo}", size=11, color=cor_texto, no_wrap=True, overflow="ellipsis", expand=True),
-                            ft.IconButton(ft.Icons.CLOSE, icon_color="red", icon_size=14, on_click=lambda e, x=i: remover_musica(x))
-                        ], alignment="spaceBetween"),
-                        style=ft.ButtonStyle(padding=5),
-                        on_click=lambda e, x=i: tocar_index(x)
-                    )
-                    lv_playlist.controls.append(linha)
-            page.update()
-
-        # --- AQUI ESTAVA O ERRO, AGORA CORRIGIDO ---
-        def salvar_carregar(acao):
-            # A declaração nonlocal deve ser a PRIMEIRA coisa
-            nonlocal all_playlists, current_playlist_name, playlist
-            
+        def tarefa_bg():
             try:
-                if acao == "salvar":
-                    all_playlists[current_playlist_name] = playlist
-                    page.client_storage.set("pl_data", all_playlists)
-                    page.client_storage.set("last_pl", current_playlist_name)
-                elif acao == "carregar":
-                    d = page.client_storage.get("pl_data")
-                    l = page.client_storage.get("last_pl")
-                    if d: 
-                        all_playlists = d
-                        if l and l in all_playlists: current_playlist_name = l
-                        else: current_playlist_name = list(all_playlists.keys())[0]
-                        playlist = all_playlists[current_playlist_name]
-                        lbl_nome_playlist.value = f"Playlist: {current_playlist_name}"
-            except: pass
-
-        def importar_link(e):
-            url = txt_import_url.value
-            if not url: return
-            lbl_status.value = "Buscando..."
-            btn_import.disabled = True
-            page.update()
-
-            def processar():
-                nonlocal playlist
-                opts = {'extract_flat': True, 'quiet': True, 'no_warnings': True, 'ignoreerrors': True}
-                try:
-                    with yt_dlp.YoutubeDL(opts) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        novas = []
-                        if 'entries' in info:
-                            for v in info['entries']:
-                                if v: novas.append(f"https://www.youtube.com/watch?v={v.get('id')} - {v.get('title','Track')}")
-                        else:
-                            novas.append(f"{info.get('webpage_url', url)} - {info.get('title', 'Track')}")
-                        
-                        playlist.extend(novas)
-                        salvar_carregar("salvar")
-                        renderizar_playlist()
-                        mostrar_aviso("Adicionado!", "green")
-                except: mostrar_aviso("Erro ao buscar", "red")
-                
-                btn_import.disabled = False
-                lbl_status.value = "Pronto"
-                txt_import_url.value = ""
-                page.update()
+                opts = {'extract_flat': True, 'quiet': True, 'ignoreerrors': True}
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    novas = []
+                    if 'entries' in info:
+                        for v in info['entries']:
+                            if v: novas.append(f"https://www.youtube.com/watch?v={v['id']} - {v['title']}")
+                    else:
+                        novas.append(f"{info.get('webpage_url')} - {info.get('title')}")
+                    
+                    self.controller.adicionar_musicas(novas)
+                    self.renderizar_lista()
+                    self.page.pubsub.send_all({"tipo": "status", "texto": f"{len(novas)} adicionadas!"})
+            except Exception as err:
+                self.page.pubsub.send_all({"tipo": "status", "texto": "Erro ao buscar link"})
             
-            threading.Thread(target=processar, daemon=True).start()
+            self.btn_import.disabled = False
+            self.txt_url.value = ""
+            self.update()
 
-        def tocar_index(index):
-            nonlocal current_index, is_playing
-            if not playlist or index < 0 or index >= len(playlist): return
-            
-            current_index = index
-            renderizar_playlist()
-            
-            raw_item = playlist[current_index]
-            link = raw_item.split(" - ")[0]
-            nome = raw_item.split(" - ", 1)[1] if " - " in raw_item else "Audio"
-            
-            lbl_titulo.value = nome
-            lbl_status.value = "Carregando Audio..."
-            if audio_player: audio_player.pause()
-            page.update()
+        threading.Thread(target=tarefa_bg, daemon=True).start()
 
-            def extrair_turbo():
-                nonlocal is_playing
-                if not audio_player: return
-                try:
-                    ydl_opts = {
-                        'format': 'bestaudio', 
-                        'quiet': True,
-                        'no_warnings': True,
-                        'nocheckcertificate': True, 
-                        'noplaylist': True,
-                        'socket_timeout': 10
-                    }
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(link, download=False)
-                        url_play = info['url']
-                        
-                        audio_player.src = url_play
-                        if info.get('thumbnail'): img_capa.src = info['thumbnail']
-                        
-                        audio_player.update()
-                        time.sleep(0.1) 
-                        audio_player.play()
-                        
-                        is_playing = True
-                        lbl_status.value = "Tocando 🔊"
-                        btn_play.icon = ft.Icons.PAUSE_CIRCLE_FILLED
-                except Exception as e:
-                    print(e)
-                    mostrar_aviso("Falha no link. Pulando...", "orange")
-                    time.sleep(1)
-                    proxima(None)
-                page.update()
-
-            threading.Thread(target=extrair_turbo, daemon=True).start()
-
-        def controles(acao):
-            nonlocal is_playing, current_index, is_shuffled
-            if acao == "play":
-                if not audio_player: return
-                if is_playing:
-                    audio_player.pause()
-                    is_playing = False
-                    btn_play.icon = ft.Icons.PLAY_CIRCLE_FILLED
-                else:
-                    if audio_player.src: 
-                        audio_player.resume()
-                        is_playing = True
-                        btn_play.icon = ft.Icons.PAUSE_CIRCLE_FILLED
-                    else: tocar_index(current_index)
-            
-            elif acao == "next":
-                if current_index + 1 < len(playlist): tocar_index(current_index + 1)
-            
-            elif acao == "prev":
-                if current_index > 0: tocar_index(current_index - 1)
-            
-            elif acao == "shuffle":
-                is_shuffled = not is_shuffled
-                if is_shuffled: 
-                    random.shuffle(playlist)
-                    mostrar_aviso("Aleatório ON")
-                else: mostrar_aviso("Aleatório OFF")
-                renderizar_playlist()
-                salvar_carregar("salvar")
-
-            page.update()
-
-        def remover_musica(idx):
-            if 0 <= idx < len(playlist):
-                playlist.pop(idx)
-                salvar_carregar("salvar")
-                renderizar_playlist()
-
-        # --- Montagem Simples ---
+    def build(self):
+        # Componentes UI
+        self.img_capa = ft.Image(src="https://img.icons8.com/fluency/240/music-record.png", width=140, height=140, border_radius=10, fit="cover")
+        self.lbl_titulo = ft.Text("Selecione uma música", size=16, weight="bold", text_align="center")
+        self.lbl_status = ft.Text("Aguardando", size=12, color="grey", text_align="center")
+        self.lbl_tempo = ft.Text("00:00", size=10)
+        self.slider = ft.Slider(min=0, max=100, expand=True, height=20, on_change=lambda e: self.controller.seek(e.control.value))
         
-        btn_import = ft.IconButton(ft.Icons.DOWNLOAD, on_click=importar_link, icon_color="blue")
+        self.txt_url = ft.TextField(hint_text="Link YouTube/Playlist", text_size=12, expand=True, height=45, border_radius=10, bgcolor="#222222", border_width=0)
+        self.btn_import = ft.IconButton(ft.Icons.DOWNLOAD_ROUNDED, icon_color="blue", bgcolor="#222222", on_click=self.acao_importar)
         
-        btn_prev = ft.IconButton(ft.Icons.SKIP_PREVIOUS, on_click=lambda e: controles("prev"))
-        btn_play = ft.IconButton(ft.Icons.PLAY_CIRCLE_FILLED, icon_size=50, icon_color="blue", on_click=lambda e: controles("play"))
-        btn_next = ft.IconButton(ft.Icons.SKIP_NEXT, on_click=lambda e: controles("next"))
-        btn_shuffle = ft.IconButton(ft.Icons.SHUFFLE, icon_size=20, on_click=lambda e: controles("shuffle"))
+        # Controles
+        self.btn_prev = ft.IconButton(ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=30, on_click=lambda e: self.controller.anterior())
+        self.btn_play = ft.IconButton(ft.Icons.PLAY_CIRCLE_FILLED_ROUNDED, icon_size=60, icon_color="blue", on_click=self.acao_play_pause)
+        self.btn_next = ft.IconButton(ft.Icons.SKIP_NEXT_ROUNDED, icon_size=30, on_click=lambda e: self.controller.proxima())
+        
+        # Lista
+        self.lista_view = ft.Column(spacing=2, scroll="auto")
+        container_lista = ft.Container(content=self.lista_view, expand=True, bgcolor="#0A0A0A", border_radius=15, padding=10)
 
-        btn_menu = ft.PopupMenuButton(
-            icon=ft.Icons.MORE_VERT,
-            items=[
-                ft.PopupMenuItem(content=ft.Text("Limpar Playlist"), on_click=lambda e: limpar_tudo()),
-            ]
-        )
-        def limpar_tudo():
-            nonlocal playlist
-            playlist = []
-            renderizar_playlist()
-            salvar_carregar("salvar")
+        # Carregar dados iniciais
+        self.controller.carregar_memoria()
+        self.renderizar_lista()
 
-        page.add(
-            ft.Column([
-                ft.Row([lbl_Andre0], alignment="center"),
-                ft.Row([lbl_Andre], alignment="center"),
-                ft.Row([txt_import_url, btn_import], alignment="center"),
-                ft.Row([lbl_nome_playlist], alignment="center"),
-                ft.Divider(height=1, color="#333333"),
-                
-                ft.Row([
-                    img_capa,
-                    ft.Column([
-                        lbl_titulo,
-                        lbl_status,
-                        lbl_tempo_now,
-                        slider_tempo
-                    ], expand=True)
-                ], alignment="start"),
+        # Layout Final Montado
+        return ft.Column([
+            ft.Container(height=10),
+            ft.Text("PLAYER PRO V3", size=12, weight="bold", color="blue", text_align="center"),
+            
+            # Área de Importação
+            ft.Container(
+                content=ft.Row([self.txt_url, self.btn_import]),
+                padding=10
+            ),
+            
+            # Área do Player (Capa e Controles)
+            ft.Container(
+                content=ft.Column([
+                    ft.Row([self.img_capa], alignment="center"),
+                    ft.Container(height=5),
+                    self.lbl_titulo,
+                    self.lbl_status,
+                    ft.Row([self.lbl_tempo, self.slider], alignment="center"),
+                    ft.Row([self.btn_prev, self.btn_play, self.btn_next], alignment="center"),
+                ]),
+                padding=15,
+                bgcolor="#161616",
+                border_radius=20,
+                margin=10
+            ),
+            
+            ft.Divider(height=1, color="#333333"),
+            
+            # Lista de Músicas
+            ft.Text("  Sua Playlist:", size=12, color="grey"),
+            container_lista
+        ], expand=True)
 
-                ft.Row([btn_shuffle, btn_prev, btn_play, btn_next, btn_menu], alignment="center"),
-                
-                ft.Divider(height=1, color="#333333"),
-                
-                ft.Container(content=lv_playlist, expand=True, bgcolor="#111111", border_radius=5)
-            ], expand=True)
-        )
+def main(page: ft.Page):
+    page.title = "Player Pro"
+    page.bgcolor = "black"
+    page.theme_mode = "dark"
+    page.padding = 0
+    page.window_width = 390
+    page.window_height = 800
+    
+    # Instancia o App e adiciona na página
+    app = PlayerUI(page)
+    page.add(app)
 
-        salvar_carregar("carregar")
-        renderizar_playlist()
-
-        # --- FIM DO CÓDIGO ---
-
-    except Exception as e:
-        page.clean()
-        page.add(ft.Text(f"Erro: {e}", color="red"))
-        page.update()
-
-ft.app(target=main)
+if __name__ == "__main__":
+    ft.app(target=main)
