@@ -2,8 +2,8 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main, master ]
-  workflow_dispatch:
+    branches:
+      - main  # Ou 'master', dependendo do nome da sua branch principal
 
 jobs:
   build:
@@ -13,40 +13,24 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Java Zulu (Mais estável para build Android)
-    - name: Setup Java
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'zulu'
-        java-version: '17'
-
     - name: Setup Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v4
       with:
         python-version: '3.11'
 
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        channel: 'stable'
-
-    - name: Accept Android Licenses
-      run: |
-        yes | flutter doctor --android-licenses
-
     - name: Install Dependencies
       run: |
-        pip install -U pip
+        pip install -r requirements.txt
         pip install flet
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: Build APK with Flet
-      # Voltamos ao comando padrão que funciona
+    - name: Flet Build APK
+      # Este comando usa a ferramenta oficial do Flet para construir o APK
+      # Ele lê o requirements.txt automaticamente
       run: |
         flet build apk --verbose
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: meu-player-android
-        path: build/apk/
+        name: player_pro_v3.apk
+        path: build/apk/app-release.apk
