@@ -1,3 +1,8 @@
 flet
 yt-dlp
 certifi
+mutagen
+pycryptodomex
+websockets
+requests
+typing_extensions
