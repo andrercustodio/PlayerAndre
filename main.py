@@ -17,6 +17,7 @@ class AudioController:
         # Injeta o audio na página (Overlay)
         if self.audio_widget:
             self.page.overlay.append(self.audio_widget)
+            self.page.update()
 
     def _criar_audio_widget(self):
         try:
@@ -75,7 +76,6 @@ class AudioController:
         self.current_index = index
         musica_raw = self.playlist[index]
         
-        # Pega título seguro
         try:
             titulo = musica_raw.split(" - ", 1)[1] if " - " in musica_raw else "Áudio"
         except: titulo = "Áudio"
@@ -129,16 +129,16 @@ class AudioController:
         except: pass
 
 # --- UI (INTERFACE VISUAL) ---
-# ATENÇÃO: Mudamos de UserControl para Column
 class PlayerUI(ft.Column):
     def __init__(self, page):
         super().__init__()
-        self.page = page
-        self.expand = True # Ocupa a tela toda
-        self.controller = AudioController(page)
+        # CORREÇÃO AQUI: Usamos 'self.pg' em vez de 'self.page' para evitar conflito
+        self.pg = page 
+        self.expand = True 
+        self.controller = AudioController(self.pg)
         
         # Inscreve para receber atualizações
-        self.page.pubsub.subscribe(self.on_message)
+        self.pg.pubsub.subscribe(self.on_message)
 
         # --- CRIAÇÃO DOS ELEMENTOS VISUAIS ---
         self.img_capa = ft.Image(src="https://img.icons8.com/fluency/240/music-record.png", width=140, height=140, border_radius=10, fit="cover")
@@ -160,7 +160,6 @@ class PlayerUI(ft.Column):
         self.container_lista = ft.Container(content=self.lista_view, expand=True, bgcolor="#0A0A0A", border_radius=15, padding=10)
 
         # --- MONTAGEM DO LAYOUT ---
-        # Como herdamos de Column, definimos self.controls aqui
         self.controls = [
             ft.Container(height=10),
             ft.Text("PLAYER PRO V3", size=12, weight="bold", color="blue", text_align="center"),
@@ -295,9 +294,9 @@ class PlayerUI(ft.Column):
                     
                     self.controller.adicionar_musicas(novas)
                     self.renderizar_lista()
-                    self.page.pubsub.send_all({"tipo": "status", "texto": f"{len(novas)} adicionadas!"})
+                    self.pg.pubsub.send_all({"tipo": "status", "texto": f"{len(novas)} adicionadas!"})
             except Exception as err:
-                self.page.pubsub.send_all({"tipo": "status", "texto": "Erro ao buscar link"})
+                self.pg.pubsub.send_all({"tipo": "status", "texto": "Erro ao buscar link"})
             
             self.btn_import.disabled = False
             self.txt_url.value = ""
@@ -310,7 +309,6 @@ def main(page: ft.Page):
     page.bgcolor = "black"
     page.theme_mode = "dark"
     page.padding = 0
-    # Ajuste para telas mobile
     page.window_width = 390
     page.window_height = 800
     
